@@ -1,0 +1,7 @@
+# This file lists the (absolute) path to the OS commands called by python during optimisation
+# It should be on all machines, but each machine should have its own personal copy (with the 
+# respective paths to the commands used.)
+
+is_client = True
+glpsol = '/opt/glpk/bin/glpsol'
+neato = '/usr/bin/neato'
