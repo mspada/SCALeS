@@ -39,13 +39,21 @@ On top of this, a perturbation/analysis layer allows sampling random disruptions
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.9+ (tested with 3.9.6)
 - A GLPK installation (`glpsol`) for solving the LP/MILP model
 - Graphviz (`neato`) if you want rendered `.dot`/`.pdf` network diagrams
 
+### Virtual environment setup
+
+Create and activate a virtual environment in the repository root, then install the dependencies:
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+The `.venv/` folder is git-ignored, so each user creates their own. To leave the environment, run `deactivate`. In Positron or VS Code, select the `.venv` interpreter from the interpreter picker.
 
 ### Local configuration
 
