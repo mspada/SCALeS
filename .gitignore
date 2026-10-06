@@ -1,1 +1,14 @@
+# Virtual Environment
 .venv/
+# Editor settings
+.vscode/
+# Python cache files
+__pycache__/
+*.pyc
+# macOS and Jupyter clutter
+.DS_Store #Convenience for Mac users
+.ipynb_checkpoints/
+# Generated networks (keep folder and example image)
+networks/*
+!networks/.gitkeep
+!networks/network_example.png #Keep as an exmample
