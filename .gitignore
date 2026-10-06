@@ -5,10 +5,11 @@
 # Python cache files
 __pycache__/
 *.pyc
-# macOS and Jupyter clutter
-.DS_Store #Convenience for Mac users
+# macOS and Jupyter clutter (convenience for Mac users)
+.DS_Store
 .ipynb_checkpoints/
 # Generated networks (keep folder and example image)
 networks/*
 !networks/.gitkeep
-!networks/network_example.png #Keep as an exmample
+# Keep as an example
+!networks/network_example.png
