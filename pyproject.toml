@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scales"
+version = "0.2.0"
+description = "Generation, modelling and simulation of realistic very large scale supply chain instances"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Tomas Hruz" },
+    { name = "Maxime Larcher" },
+    { name = "Jingqiu Ding" },
+    { name = "Joel Weingart" },
+    { name = "Matteo Spada" },
+    { name = "Maike Scherrer" },
+]
+dependencies = [
+    "numpy",
+    "networkx",
+    "matplotlib",
+    "rich",
+    "pydot",
+    "reportlab",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+scales = ["model/lp/*.mod"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

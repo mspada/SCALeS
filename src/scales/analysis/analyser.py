@@ -1,15 +1,15 @@
-import numpy as np 
-import networkx as nx
-import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-
-import time
 import json
+import os
+from typing import TYPE_CHECKING
 
-from scb import SupplyChainBackbone
-from chunglu_converter import ChungLuConverter
-from supplychain import SupplyChain
-from perturber import SupplyChainPerturber
+import matplotlib.pyplot as plt
+import numpy as np
+
+from .. import config
+from .perturber import SupplyChainPerturber
+
+if TYPE_CHECKING:
+    from ..model.supplychain import SupplyChain
 
 
 """
@@ -20,11 +20,13 @@ Two methods methods --- analyse_perturbation and plot_from_data --- can be calle
     - analyse_perturbation: takes a supply chain, sample some perturbations and measure the impact of perturbations.
         Arguments are:
         - filename (str): the file in which the results generated should be stored.
+            None uses results/perturbation/perturbation_data.json.
         - rep (int, > 0): the number of perturbations to generate.
         - other: any other parameter will be transmitted to SupplyChainPerturber.perturbe.
     - plot_from_data: plots the results from analyse_perturbation.
         Arguments are: 
         - filename (str): the file from which to read the results.
+        - plot_filename (str): where to save the plot. Default is results/perturbation/perturbation_analysis.png.
         - c_binwidth (float): the size of the bins when displaying the cost.
         - u_binwidth (float): the size of the bins when displahing the production.
 """
@@ -33,22 +35,31 @@ Two methods methods --- analyse_perturbation and plot_from_data --- can be calle
 class SupplyChainAnalyser:
 
     @staticmethod
-    def analyse_perturbation(filename: str, sc: SupplyChain, **parameters):
-        rep = parameters['rep'] if 'rep' in parameters and type(parameters['rep']) == int else 100
+    def analyse_perturbation(filename: str, sc: 'SupplyChain', **parameters) -> str:
+        """
+        Samples a specified number of stochastic perturbations and calculates the impact on flow optimization.
+        Writes all output data (costs, productions, variation metrics, and runtimes) to filename in JSON format.
+        Returns the path of the written file.
+        """
+        if filename is None:
+            filename = str(config.results_dir("perturbation") / "perturbation_data.json")
+        rep = parameters['rep'] if 'rep' in parameters and isinstance(parameters['rep'], (int, np.integer)) else 100
         verbose = parameters.get('verbose', False)
                 
         costs, productions, Deltas, opt_times, pert_times = [], [], [], [], []
 
         for i in range(rep): 
-            perturbed, perturbation_details = SupplyChainPerturber.perturbe(sc, state=(i+1, rep), **parameters)
-            perturbed.find_optimum(verbose=verbose, state=(i+1, rep))
+            parameters['state'] = (i+1, rep)
+            parameters['verbose'] = verbose
+            perturbed, perturbation_details = SupplyChainPerturber.perturbe(sc, **parameters)
+            perturbed._state = (i+1, rep)
+            perturbed.find_optimum()
             costs.append(perturbed.cost())
             productions.append(perturbed.production())
             Deltas.append(perturbation_details['Delta'])
             opt_times.append(perturbed.optimisation_time())
             pert_times.append(perturbation_details['time'])
 
-        # TODO -- Think about adding size, number of edges, etc to the data
         data = { 
             'input': {
                 'origin': 'analyse_perturbation',
@@ -56,6 +67,7 @@ class SupplyChainAnalyser:
                 'parameters': parameters
             },
             'output': {
+                'size': sc.size(),
                 'og_cost': sc.cost(),
                 'og_prod': sc.production(),
                 'og_opt_time': sc.optimisation_time(),
@@ -67,11 +79,18 @@ class SupplyChainAnalyser:
             }
         }
 
+        if os.path.dirname(filename):
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, 'w') as jsonfile: 
             json.dump(data, jsonfile, indent=4)
+        return filename
 
     @staticmethod
-    def plot_from_data(filename: str, c_binwidth=.5, u_binwidth=.5): 
+    def plot_from_data(filename: str, c_binwidth: float = .5, u_binwidth: float = .5, plot_filename: str = None) -> None: 
+        """
+        Loads perturbation data from filename and saves clean multi-subplot distribution and variation charts.
+        Saves headless-friendly output directly to plot_filename (or results/perturbation/perturbation_analysis.png).
+        """
         with open(filename, 'r') as jsonfile:
             data = json.load(jsonfile)
         
@@ -79,6 +98,7 @@ class SupplyChainAnalyser:
         output = data['output']
 
         rep = input['rep']
+        size = output.get('size', 'TBD')
         og_cost, og_prod, costs, prods, Deltas = output['og_cost'], output['og_prod'], output['costs'], output['prods'], output['Deltas']
         opt_times, pert_times = output['opt_times'], output['pert_times']
 
@@ -88,7 +108,7 @@ class SupplyChainAnalyser:
         u_bins = np.arange(u_start, u_end, u_binwidth)
 
         plt.figure(figsize=(15, 9))
-        plt.suptitle(f"Statistics under stochastic perturbation\n(size: TBD -- {rep} repetitions -- {np.average(opt_times):.2f}s for opt -- {np.average(pert_times):.2f}s for pert)", fontsize=14)
+        plt.suptitle(f"Statistics under stochastic perturbation\n(size: {size} -- {rep} repetitions -- {np.average(opt_times):.2f}s for opt -- {np.average(pert_times):.2f}s for pert)", fontsize=14)
 
         plt.subplot(2,3,1)
         plt.title("Cost distribution")
@@ -105,12 +125,11 @@ class SupplyChainAnalyser:
         plt.legend()
 
         plt.subplot(2,3,3)
-        pc_model = LinearRegression()
-        pc_model.fit( np.array(prods).reshape((-1,1)), np.array(costs) )
-        plt.title(fr"Cost against production $R^2=${pc_model.score(np.array(prods).reshape((-1,1)), np.array(costs)):.2f}")
+        slope, intercept, r2 = _linear_fit(prods, costs)
+        plt.title(fr"Cost against production $R^2=${r2:.2f}")
         plt.scatter(prods, costs)
         plt.scatter( [og_prod], [og_cost], color='red')
-        plt.plot( prods, pc_model.predict(np.array(prods).reshape((-1,1))), color='orange' )
+        plt.plot( prods, slope * np.array(prods) + intercept, color='orange' )
 
         plt.subplot(2,3,4)
         plt.title('Cost variation against total variation')
@@ -125,13 +144,23 @@ class SupplyChainAnalyser:
         # Y = np.array(prods) - self.supply_chain.production()
         Y = np.abs(np.array(prods) - og_prod)
         plt.scatter(X, Y)
-        plt.show()
 
-if __name__ == "__main__":
-    filename = 'results/perturbation_data_output.json'    
-    cl = SupplyChainBackbone.medium_example(prune=True, integrity='pertial', vratio=.8)
-    clc = ChungLuConverter(cl, verbose=True)
-    clc.to_json(filename='temp/temp.json', duration=50, demand=1e9, supply=1e9, verbose=True)
-    sc = SupplyChain('temp/temp.json', verbose=True)
-    SupplyChainAnalyser.analyse_perturbation(filename, sc, type='normal', p=.1, rep=100, verbose=True)
-    SupplyChainAnalyser.plot_from_data(filename, c_binwidth=10, u_binwidth=1)
+        if plot_filename:
+            if os.path.dirname(plot_filename):
+                os.makedirs(os.path.dirname(plot_filename), exist_ok=True)
+            plt.savefig(plot_filename, format='png', dpi=300, bbox_inches='tight')
+        else:
+            plt.savefig(config.results_dir("perturbation") / "perturbation_analysis.png", format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+
+def _linear_fit(x, y) -> tuple[float, float, float]:
+    """Least-squares line y = slope * x + intercept and its coefficient of determination R^2."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    if np.ptp(x) == 0:
+        return 0.0, float(np.mean(y)), 0.0
+    slope, intercept = np.polyfit(x, y, 1)
+    ss_res = np.sum((y - (slope * x + intercept)) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    return float(slope), float(intercept), float(r2)
