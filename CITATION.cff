@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated working paper."
+title: "SCALeS: generation, modelling and simulation of realistic very large scale supply chain instances"
+version: 0.2.0
+authors:
+  - family-names: Hruz
+    given-names: Tomas
+    affiliation: "Institute of Theoretical Computer Science, ETH Zurich"
+  - family-names: Larcher
+    given-names: Maxime
+    affiliation: "Institute of Theoretical Computer Science, ETH Zurich"
+  - family-names: Ding
+    given-names: Jingqiu
+    affiliation: "Institute of Theoretical Computer Science, ETH Zurich"
+  - family-names: Weingart
+    given-names: Joel
+    affiliation: "ZHAW"
+  - family-names: Spada
+    given-names: Matteo
+    affiliation: "ZHAW"
+  - family-names: Scherrer
+    given-names: Maike
+    affiliation: "ZHAW"
+preferred-citation:
+  type: article
+  title: "Simple generation, modeling and simulation of realistic very large scale supply chain instances"
+  authors:
+    - family-names: Hruz
+      given-names: Tomas
+    - family-names: Larcher
+      given-names: Maxime
+    - family-names: Ding
+      given-names: Jingqiu
+    - family-names: Weingart
+      given-names: Joel
+    - family-names: Spada
+      given-names: Matteo
+    - family-names: Scherrer
+      given-names: Maike
+  year: 2026
+  notes: "Work in progress"

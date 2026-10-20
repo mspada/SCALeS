@@ -2,14 +2,28 @@
 .venv/
 # Editor settings
 .vscode/
-# Python cache files
+# Python cache, build and test files
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
 # macOS and Jupyter clutter (convenience for Mac users)
 .DS_Store
 .ipynb_checkpoints/
-# Generated networks (keep folder and example image)
+# Obsolete machine-specific configuration (replaced by scales.config)
+src/local.py
+
+# Generated outputs: each pipeline stage writes into one of these folders (see src/scales/config.py).
+# The folders themselves are kept in the repository.
 networks/*
 !networks/.gitkeep
-# Keep as an example
 !networks/network_example.png
+supply_chains/*
+!supply_chains/.gitkeep
+results/*
+!results/.gitkeep
+temp/*
+!temp/.gitkeep
+
+# The working paper PDF lives outside this repository
+paper/*.pdf

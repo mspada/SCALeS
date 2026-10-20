@@ -1,6 +1,0 @@
-numpy
-networkx
-matplotlib
-scikit-learn
-rich
-pydot

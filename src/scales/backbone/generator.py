@@ -1,16 +1,14 @@
 import numpy as np
 import networkx as nx
-from networkx.drawing.nx_pydot import write_dot
-import matplotlib.pyplot as plt
-from matplotlib.colors import CSS4_COLORS
-from itertools import product, combinations
+from itertools import combinations
 from string import ascii_uppercase
 import random
 import time
-import threading
 import math
 
-from verboser import Verboser
+from ..verboser import Verboser
+from .. import config
+from .warehouse import inject_warehouses, prune_warehouses
 
 
 """
@@ -25,7 +23,7 @@ During initialisation, may take several arguments described below.
     - tau (float or List[float]): the exponent in the power law used when generating the weights. Is ignored if weights is given.
         When given as float, generates the weight identically for all nodes in multilayer.
         When given as List[float], generates the weights in layer i with exponent tau[i] (multilayer only).
-        Default is tau = 2.5.
+        Default is tau = 2.5. The tau for warehouses is inherited from global tau.
     - alpha (float of Dict[float], <= 1): the outer multiplicative factor in the probability of having an edge between two nodes. 
         When given as a float in multilayer, uses the same alpha for all generations.
         When given as a Dict[float], uses alpha[(i,j)] between layers i and j. 
@@ -54,16 +52,23 @@ During initialisation, may take several arguments described below.
         Default is 0.8.
     - verbose (bool): details the execution of each step when set to True.
     - output (string): 'png', 'dot', 'window'
-        Default is 'png'.
+        Default is 'png'. Sets the output type for the draw() method.
     - seed (unsigned int): robust implementation, type is tested, global generators not seeded, using local instances.
         The data produced are identical for the same seed (network_diagram - tested with dot).
         Default is no seed.
     - kc (List[int]): Cut-off for truncated power law. 
         If kc =[i1, i2, ..., i3], the length of the vector must equal legth of the size.
         Befault cut-off is kc=[sqrt(size[0]), ... etc]
-    
+    - w (float): w*100 defines how mane percent of additional warehouse nodes are generated.
+        Default is 0.1.
+    -betawin (float): the beta for indegree of a warehouses.
+        Default is inherited from the global beta parameter, which defaults to 2.
+    -betawout (float): the beta for outdegree of a warehouses.
+        Default is inherited from the global beta parameter, which defaults to 2.
+
 Once initialised, provides several methods. The most useful is:
-    - draw(): draws a visual representation of the graph according to the output (png, dot or window).
+    - draw(filename): draws a visual representation of the graph according to the output (png, svg, dot or window).
+        Default filename is networks/backbones/backbone (see scales.config).
     
 The class also provides some static methods for easy generation of SCB (Supply Chain Backbone) graph with preset parameters. Available are:
     - tiny_example: multilayer SCB (Supply Chain Backbone) graph with 3 layers of 2, 4, 2 nodes repectively.
@@ -95,8 +100,7 @@ class SupplyChainBackbone:
         with Verboser(verbose, f"Generating SCB (Supply Chain Backbone) graph ({num_attempts} attempt{'s' if num_attempts > 1 else ''} -- {0:.2f}s)") as verboser:
             start = time.time()
             if not prune:
-                if self._is_simple: self._generate_simple_chunglu()
-                else: self._generate()
+                self._generate()
                 self._edge_number = self.edge_number()
                 verboser.terminate(f"SCB (Supply Chain Backbone) graph successfully generated ({time.time()-start:.2f}s).")
             else: 
@@ -117,25 +121,34 @@ class SupplyChainBackbone:
                 self.prune_warehouse(verbose=verbose)
             self._edge_number = self.edge_number()
 
-    def original_size(self):
+    def original_size(self) -> list[int]:
+        """Returns the original, pre-pruned layer sizes of the backbone."""
         return self._size
 
-    def size(self):
+    def size(self) -> list[int]:
+        """Returns the current, post-pruned layer sizes of the backbone."""
         return self._current_size(self.network, len(self._size))
 
-    def edge_number(self):
+    def edge_number(self) -> dict[tuple[int, int], int]:
+        """Computes and returns a dictionary of edge counts between each pair of layers."""
         return { (i, j): sum( self.network.nodes[u]['layer']==i and self.network.nodes[v]['layer']==j for u,v in self.network.edges ) for i, j in combinations(range(len(self._size)), 2) }
 
-    def original_edge_number(self):
+    def original_edge_number(self) -> dict:
+        """Returns the initial pre-pruning edge distribution counts between layers."""
         return self._edge_number
 
-    def draw(self):
-        self._draw(self.network,self._output)
+    def draw(self, filename: str = None) -> None:
+        """Draws the backbone graph to the configured output format (png, svg, dot, window)."""
+        if filename is None:
+            filename = str(config.networks_dir("backbones") / "backbone")
+        self._draw(self.network, self._output, filename=filename)
 
-    def _prune(self):
+    def _prune(self) -> None:
+        """Helper method to execute multilayer degree-based pruning on the network."""
         self._prune_multilayer(self.network, verbose=False)
 
-    def _truncated_power_law(self, gamma, kc, size):
+    def _truncated_power_law(self, gamma: float, kc: float, size: int) -> list[int]:
+        """Generates random integers from a Zipf distribution bounded/truncated by a cutoff."""
         samples = []
         while len(samples) < size:
             k = self._np_rng.zipf(a=gamma)
@@ -177,8 +190,7 @@ class SupplyChainBackbone:
                 ]
                 # print(size, weights)
             elif 'kc' in kwargs and (len(kc) != len(size)):
-                print("Error, kc not consistent with the size")
-                exit(1)
+                raise ValueError(f"kc has {len(kc)} entries but size has {len(size)} layers; they must match.")
             else:
                 weights = [
                     self._truncated_power_law(
@@ -206,26 +218,29 @@ class SupplyChainBackbone:
         vratio = [ kwargs['vratio'] ] * len(size) if 'vratio' in kwargs and type(kwargs['vratio']) in [float, int] else \
                     kwargs['vratio'] if 'vratio' in kwargs and type(kwargs['vratio']) == list and len(kwargs['vratio']) == len(size) else\
                     [ .8 ] * len(size)
-
+        
         self._w = kwargs.get('w', 0.1)
-        if 'betaw' in kwargs:
-            self._betaw = kwargs['betaw']
+        
+        # Parse incoming beta for warehouses
+        if 'betawin' in kwargs:
+            self._betawin = kwargs['betawin']
         else:
-            if 'beta' in kwargs and isinstance(kwargs['beta'], (float, int)):
-                self._betaw = kwargs['beta']
-            elif 'beta' not in kwargs:
-                self._betaw = 2 # default beta
-            else:
-                raise ValueError("betaw must be defined if beta is not a scalar.")
-
+            self._betawin = kwargs.get('beta', 2) if isinstance(kwargs.get('beta', 2), (float, int)) else 2
+            
+        # Parse outgoing beta for warehouses
+        if 'betawout' in kwargs:
+            self._betawout = kwargs['betawout']
+        else:
+            self._betawout = kwargs.get('beta', 2) if isinstance(kwargs.get('beta', 2), (float, int)) else 2
+        
         prune = kwargs['prune'] if 'prune' in kwargs else False
         integrity = kwargs['integrity'] if 'integrity' in kwargs and kwargs['integrity'] in ['full', 'partial', 'none'] else 'none'
         verbose = kwargs['verbose'] if 'verbose' in kwargs and type(kwargs['verbose']) == bool else False
-        output = kwargs['output'] if 'output' in kwargs and kwargs['output'] in ['png', 'dot', 'window'] else 'png'
+        output = kwargs['output'] if 'output' in kwargs and kwargs['output'] in ['png', 'svg', 'dot', 'window'] else 'png'
         return weights, size, alpha, beta, prune, integrity, vratio, verbose, output
 
     def _generate(self):
-        nodes = [ ((X, n), {'layer': X, 'weight': w, 'top_layer': X==len(self._size)-1, 'bot_layer': X==0, 'node_type': 'P' }) for X, wX in enumerate(self.weights) for n, w in enumerate(wX) ]        
+        nodes = [ ((X, n), {'layer': X, 'weight': w, 'top_layer': X==len(self._size)-1, 'bot_layer': X==0, 'type': 'P' }) for X, wX in enumerate(self.weights) for n, w in enumerate(wX) ]        
         edges = []
         for (X, wX), (Y, wY) in combinations(enumerate(self.weights), 2): 
             edges.extend(self._edges_from_weights(
@@ -242,70 +257,46 @@ class SupplyChainBackbone:
         self.network.add_edges_from(edges)
 
     # helper methods
-    def _adj_matrix_from_weights(self, weightsA, weightsB, alpha, beta):
+    def _adj_matrix_from_weights(self, weightsA: list[float], weightsB: list[float], alpha: float, beta: float) -> np.ndarray:
+        """Computes a random adjacency matrix between two sets of nodes using standard Zipf probabilities."""
         proba_adj_matrix = alpha * np.minimum(beta * np.outer( weightsA, weightsB) / (len(weightsA) + len(weightsB)), 1)
         adj_matrix = self._np_rng.binomial(n=1, p=proba_adj_matrix, size=proba_adj_matrix.shape)
         np.fill_diagonal(adj_matrix, 0)
         return adj_matrix
     
     @staticmethod
-    def _edges_from_adj_matrix(adj_matrix, indexA=None, indexB=None):
+    def _edges_from_adj_matrix(adj_matrix: np.ndarray, indexA: int = None, indexB: int = None) -> list[tuple]:
+        """Translates a binary adjacency matrix into a list of node-to-node edge tuples."""
         return [ ( (indexA, a) if indexA is not None else a, \
                    (indexB, b) if indexB is not None else b ) \
                    for (a, b) in list(zip(*adj_matrix.nonzero())) ]
     
-    def _edges_from_weights(self, weightsA, weightsB, alpha, beta, indexA=None, indexB=None):
+    def _edges_from_weights(self, weightsA: list[float], weightsB: list[float], alpha: float, beta: float, indexA: int = None, indexB: int = None) -> list[tuple]:
+        """Generates a list of random layer-to-layer or layer-self edges based on node weight parameters."""
         return SupplyChainBackbone._edges_from_adj_matrix( 
                         adj_matrix=self._adj_matrix_from_weights(weightsA=weightsA, weightsB=weightsB, alpha=alpha, beta=beta),
                         indexA=indexA,
                         indexB=indexB)
     
-    def _draw(self, network, output):
-        # Robust layer-to-color mapping (Fixes IndexError)
-        layers = set([X for X, _ in network.nodes])
-        col_layers = {X: self._std_rng.choice(list(CSS4_COLORS.keys())) for X in layers}
-
-        # Matplotlib branches ('png' or 'window')
-        if output in ('png', 'window'):
-            col = ['red' if network.nodes[(X,n)].get('node_type') == 'W' else col_layers[X] for X, n in network.nodes]
-            lab = {(X, n): f"W{network.nodes[(X,n)].get('w_id')}" if network.nodes[(X,n)].get('node_type') == 'W' else ascii_uppercase[X] + str(n) for X, n in network.nodes}
-            pos = nx.multipartite_layout(G=network, subset_key="layer")
-            
-            plt.figure(figsize=(8, 8))
-            nx.draw(G=network, pos=pos, node_color=col, node_size=100, labels=lab, with_labels=True, connectionstyle='arc3, rad=0.1', font_size=8)
-
-            if output == 'png':
-                plt.savefig("networks/network_diagram.png", format="png", dpi=300)
-                plt.close()
-            else:
-                plt.show()
-
-        # Graphviz branch ('dot')
-        elif output == 'dot':
-            for node in network.nodes:
-                X, n = node
-                if network.nodes[node].get('node_type') == 'W':
-                    network.nodes[node]['label'] = f"W{network.nodes[node].get('w_id')}"
-                    network.nodes[node]['fillcolor'] = 'red'
-                else:
-                    network.nodes[node]['label'] = f"{ascii_uppercase[X]}{n}"
-                    network.nodes[node]['fillcolor'] = col_layers[X]
-                network.nodes[node]['style'] = "filled"
-                network.nodes[node]['group'] = str(X) 
-                
-            write_dot(network, "networks/network_diagram.dot")
-        elif output == 'none':
-            # this is important in case of many experiments, output is expensive
-            pass
-            # print("output none")
+    def _draw(self, network: nx.DiGraph, output: str, filename: str) -> None:
+        """Helper call invoking NetworkVisualizer to render the network using multipartite positioning."""
+        from ..viz.visualiser import NetworkVisualizer
+        NetworkVisualizer.draw(
+            network=network,
+            output=output,
+            filename=filename,
+            node_size=100,
+            figsize=(8, 8),
+            font_size=8,
+            rng=self._std_rng,
+            node_label_func=lambda n, d: f"{ascii_uppercase[n[0]]}{n[1]}"
+        )
 
     def get_node_from_label(self, label: str):
         """
         Takes a string label (e.g., 'A0', 'C12') and returns the corresponding 
         node tuple (X, n) if it exists in the network.
         """
-        from string import ascii_uppercase
-        
         if not label or len(label) < 2 or not label[0].isalpha():
             raise ValueError(f"Invalid label format: '{label}'. Expected format like 'A0'.")
             
@@ -327,86 +318,17 @@ class SupplyChainBackbone:
         else:
             raise KeyError(f"Node {node_tuple} from label '{label}' does not exist in the network.")
         
-    def warehouse(self):
-        N_std = len(self.network.nodes)
-        N_wh = int(self._w * N_std)
-        if N_wh <= 0:
-            return
+    def warehouse(self) -> None:
+        """Generates additional warehouse nodes and connects them with direction-aware beta weights (Algorithm 3)."""
+        inject_warehouses(self)
 
-        tau_wh = self._tau[0]
-        kc_wh = max(1.0, 1.2 * np.sqrt(N_wh))
-        
-        W_wh = self._truncated_power_law(gamma=tau_wh, kc=kc_wh, size=N_wh)
-        
-        n_layers = len(self._size)
-        if n_layers < 3:
-            return # Not enough layers to place warehouses between the lowest and highest layers
-        
-        L_sizes = self.size()
-        
-        nodes_wh = []
-        max_n = {X: -1 for X in range(n_layers)}
-        for (X, n) in self.network.nodes:
-            if n > max_n[X]:
-                max_n[X] = n
-                
-        for i in range(N_wh):
-            l = self._np_rng.integers(1, n_layers - 1)
-            max_n[l] += 1
-            n = max_n[l]
-            weight = W_wh[i]
-            # w_id is used for formatting the node name as W{w_id}
-            nodes_wh.append( ((l, n), {'layer': l, 'weight': weight, 'top_layer': l==n_layers-1, 'bot_layer': l==0, 'node_type': 'W', 'w_id': i + 1}) )
-            L_sizes[l] += 1
-            
-        self.network.add_nodes_from(nodes_wh)
-        
-        edges_wh = []
-        for X in range(n_layers):
-            for Y in range(X, n_layers):
-                nodesA = [n for n in self.network.nodes if self.network.nodes[n]['layer'] == X]
-                nodesB = [n for n in self.network.nodes if self.network.nodes[n]['layer'] == Y]
-                
-                weightsA = np.array([self.network.nodes[n]['weight'] for n in nodesA])
-                weightsB = np.array([self.network.nodes[n]['weight'] for n in nodesB])
-                
-                if X != Y:
-                    denom = L_sizes[X] + L_sizes[Y]
-                    proba = self._alpha[(X,Y)] * np.minimum(self._betaw * np.outer(weightsA, weightsB) / denom, 1) if denom > 0 else np.zeros((len(weightsA), len(weightsB)))
-                else:
-                    denom = 2 * L_sizes[X]
-                    proba = self._alpha[(X,X)] * np.minimum(self._betaw * np.outer(weightsA, weightsB) / denom, 1) if denom > 0 else np.zeros((len(weightsA), len(weightsB)))
-                    
-                adj = self._np_rng.binomial(n=1, p=proba, size=proba.shape)
-                if X == Y:
-                    np.fill_diagonal(adj, 0)
-                    
-                for i, u in enumerate(nodesA):
-                    for j, v in enumerate(nodesB):
-                        if adj[i, j] == 1:
-                            if self.network.nodes[u].get('node_type') == 'W' or self.network.nodes[v].get('node_type') == 'W':
-                                edges_wh.append((u, v))
-                                
-        self.network.add_edges_from(edges_wh)
-
-    def prune_warehouse(self, verbose=False):
-        start_num_nodes, start_num_edges = len(self.network.nodes), len(self.network.edges)
-        while True:
-            nodes_to_remove = [
-                node for node in self.network.nodes 
-                if self.network.nodes[node].get('node_type') == 'W' and 
-                   (len(list(self.network.predecessors(node))) == 0 or len(list(self.network.successors(node))) == 0)
-            ]
-            if not nodes_to_remove: 
-                break
-            self.network.remove_nodes_from(nodes_to_remove)
-            
-        end_num_nodes, end_num_edges = len(self.network.nodes), len(self.network.edges)
-        if verbose: 
-            print(f'Pruned warehouses.\nKept {100*end_num_nodes/start_num_nodes:.1f}% of the nodes and {100*end_num_edges/start_num_edges:.1f}% of the edges.')
+    def prune_warehouse(self, verbose: bool = False) -> None:
+        """Recursively removes any warehouse node with an in-degree or out-degree of 0."""
+        prune_warehouses(self.network, verbose=verbose)
 
     @staticmethod
-    def _prune_multilayer(network, verbose=False):
+    def _prune_multilayer(network: nx.DiGraph, verbose: bool = False) -> None:
+        """Prunes nodes lacking in-degree (except bottom layer) or out-degree (except top layer) in multi-layer graph."""
         start_num_nodes, start_num_edges = len(network.nodes), len(network.edges)
         while True:
             nodes_no_indegree  = [ node for node in network.nodes if len(list(network.predecessors(node))) == 0 and not network.nodes[node]['bot_layer'] ]
@@ -418,7 +340,8 @@ class SupplyChainBackbone:
         if verbose: print(f'Pruned graph.\nKept {100*end_num_nodes/start_num_nodes:.1f}% of the nodes and {100*end_num_edges/start_num_edges:.1f}% of the edges.')
 
     @staticmethod
-    def _default_pyramid(N):
+    def _default_pyramid(N: int) -> list[int]:
+        """Generates a list of default layer sizes approximating total size N, shaped exponentially."""
         z = [141, 5241, 23433, 84945, 127419, 44597]
         p = [1, z[1]/z[0], z[2]/z[0], z[3]/z[0], z[4]/z[0], z[5]/z[0]]
         r = 1 + z[1]/z[0] + z[2]/z[0] + z[3]/z[0] + z[4]/z[0] + z[5]/z[0]
@@ -438,7 +361,8 @@ class SupplyChainBackbone:
         return size
 
     @staticmethod
-    def _current_size(network, num_layers):
+    def _current_size(network: nx.DiGraph, num_layers: int) -> list[int]:
+        """Helper returning the number of active nodes within each distinct layer of the network."""
         size = [0] * num_layers
         for X, n in network.nodes:
             size[X] += 1
@@ -446,52 +370,18 @@ class SupplyChainBackbone:
 
     # generation methods
     @staticmethod
-    def _example_generation(size, tau=2.5, prune=False, complete='no', vratio=.9):
-        complete = complete if complete in {'no', 'partial', 'yes'} else 'no'    
-        if not prune: 
-            cl = SupplyChainBackbone(size=size, tau=tau, beta=2)
-            return cl
-        while True:
-            cl = SupplyChainBackbone(size=size, tau=tau, beta=2)
-            SupplyChainBackbone._prune(cl.network)
-            if complete == 'no' or complete == 'partial' and len(cl.network.nodes) >= vratio * sum(size) or len(cl.network.nodes) == sum(size):
-                return cl
-
-    @staticmethod
-    def tiny_example(tau=2.5, prune=False, integrity='none', vratio=.5):
+    def tiny_example(tau: float = 2.5, prune: bool = False, integrity: str = 'none', vratio: float = .5):
+        """Factory static method generating a tiny 3-layer (2-4-2) backbone graph with custom options."""
         return SupplyChainBackbone(size=[2,4,2], tau=tau, prune=prune, integrity=integrity, vratio=vratio)
-        # return SupplyChainBackbone._example_generation(size=[2,4,2], tau=tau, prune=prune, complete=complete, vratio=vratio)
     
     @staticmethod
-    def small_example(tau=2.5, prune=False, integrity='none', vratio=.7):
+    def small_example(tau: float = 2.5, prune: bool = False, integrity: str = 'none', vratio: float = .7):
+        """Factory static method generating a small 4-layer (3-6-6-3) backbone graph with custom options."""
         return SupplyChainBackbone(size=[3, 6, 6 ,3], beta=3, tau=tau, prune=prune, integrity=integrity, vratio=vratio)
-        # return SupplyChainBackbone._example_generation(size=[3, 6, 6 ,3], tau=tau, prune=prune, complete=complete, vratio=vratio)
 
     @staticmethod
-    def medium_example(tau=2.5, prune=False, integrity='none', vratio=.8):
+    def medium_example(tau: float = 2.5, prune: bool = False, integrity: str = 'none', vratio: float = .8):
+        """Factory static method generating a medium 5-layer (3-6-12-6-3) backbone graph with custom options."""
         return SupplyChainBackbone(size=[3,6,12,6,3], beta=4, tau=tau, prune=prune, integrity=integrity, vratio=vratio)
-        # return SupplyChainBackbone._example_generation(size=[3,6,12,6,3], tau=tau, prune=prune, complete=complete, vratio=vratio)
 
 
-if __name__ == '__main__':
-
-    cl = SupplyChainBackbone(size=[10, 10, 10], prune=True)
-    cl.draw()
-
-
-    # small = SupplyChainBackbone.small_example()
-    # small.draw()
-
-    # cl = SupplyChainBackbone(size=[4,10,4], beta=2, prune=True, integrity='partial', vratio=[1, .8, .2])
-    # cl.draw()
-
-    # tiny   = SupplyChainBackbone.tiny_example(prune=True, integrity='partial')
-    # tiny.draw()
-    # small  = SupplyChainBackbone.small_example(prune=True, integrity='full')
-    # small.draw()
-    # medium = SupplyChainBackbone.medium_example(prune=True, integrity='partial')
-    # medium.draw()
-
-    # tiny.draw()
-    # small.draw()
-    # medium.draw()
